@@ -2,4 +2,4 @@ streamlit
 yfinance
 ta
 matplotlib
-sklearn
+scikit-learn

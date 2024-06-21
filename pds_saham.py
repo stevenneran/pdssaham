@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import streamlit as st
+import base64
 
 # Fungsi untuk menginstal modul dari requirements.txt
 def install_requirements():
