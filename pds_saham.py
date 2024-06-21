@@ -25,7 +25,7 @@ import io
 
 # Title and Description
 st.title("Simulasi GBM untuk Harga Saham ASII")
-st.write("Anggota Kelompok: [Nama Anggota 1, Nama Anggota 2, Nama Anggota 3, ...]")
+st.write("Anggota Kelompok: [Argi, Azis, Cakra, Marcel, Steven]")
 
 # Parameters for simulation
 st.sidebar.header("Parameter Simulasi")
