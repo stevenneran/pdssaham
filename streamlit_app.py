@@ -1,119 +1,110 @@
+import subprocess
+import sys
 import streamlit as st
+
+# Fungsi untuk menginstal modul dari requirements.txt
+def install_requirements():
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+
+# Instalasi dari requirements.txt
+install_requirements()
+
+# Import necessary libraries
+import streamlit as st
+import yfinance as yf
 import pandas as pd
+from ta.utils import dropna
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
+import io
 
+# Title and Description
+st.title("Simulasi GBM untuk Harga Saham ASII")
+st.write("Anggota Kelompok: [Nama Anggota 1, Nama Anggota 2, Nama Anggota 3, ...]")
 
-st.title("📊 Data evaluation app")
+# Parameters for simulation
+st.sidebar.header("Parameter Simulasi")
+start_date = st.sidebar.date_input("Tanggal Mulai", pd.to_datetime("2020-01-01"))
+end_date = st.sidebar.date_input("Tanggal Akhir", pd.to_datetime("2023-12-31"))
+ticker = st.sidebar.text_input("Ticker", "ASII.JK")
+simulation_days = st.sidebar.number_input("Jangka Waktu Simulasi (hari)", min_value=1, value=252)
+n_simulations = st.sidebar.number_input("Jumlah Simulasi", min_value=1, value=100)
 
-st.write(
-    "We are so glad to see you here. ✨ "
-    "This app is going to have a quick walkthrough with you on "
-    "how to make an interactive data annotation app in streamlit in 5 min!"
-)
+# Download data
+data = yf.download(ticker, start=start_date, end=end_date)
+data['Log Return'] = np.log(data['Close'] / data['Close'].shift(1))
+data.dropna(inplace=True)
 
-st.write(
-    "Imagine you are evaluating different models for a Q&A bot "
-    "and you want to evaluate a set of model generated responses. "
-    "You have collected some user data. "
-    "Here is a sample question and response set."
-)
+# Preprocess data
+features = data.drop(columns=['Log Return']).columns
+scaler = MinMaxScaler()
+data[features] = scaler.fit_transform(data[features])
 
-data = {
-    "Questions": [
-        "Who invented the internet?",
-        "What causes the Northern Lights?",
-        "Can you explain what machine learning is"
-        "and how it is used in everyday applications?",
-        "How do penguins fly?",
-    ],
-    "Answers": [
-        "The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting"
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds.",
-    ],
-}
+# Split data
+X = data[features]
+y = data['Log Return']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-df = pd.DataFrame(data)
+# Train model
+model_best = GradientBoostingRegressor(learning_rate=0.1, max_depth=5, min_samples_leaf=2, min_samples_split=5, n_estimators=400, random_state=42)
+model_best.fit(X_train, y_train)
 
-st.write(df)
+# Calculate annualized volatility
+daily_returns = np.log(data["Close"].pct_change() + 1)
+annualized_volatility = daily_returns.std() * np.sqrt(252)
 
-st.write(
-    "Now I want to evaluate the responses from my model. "
-    "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-    "You will now notice our dataframe is in the editing mode and try to "
-    "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇"
-)
+# Define GBM simulation function
+def gbm_sim(spot_price, volatility, time_horizon, model, features, data):
+    dt = 1 / 252
+    drift = model.predict(data[features])
+    paths = np.zeros((time_horizon, n_simulations))
+    paths[0] = spot_price
+    
+    for t in range(1, time_horizon):
+        Z = np.random.normal(size=n_simulations)
+        paths[t] = paths[t-1] * np.exp((drift[t-1] - 0.5 * volatility**2) * dt + volatility * np.sqrt(dt) * Z)
+    
+    return paths
 
-df["Issue"] = [True, True, True, False]
-df["Category"] = ["Accuracy", "Accuracy", "Completeness", ""]
+# Run simulation
+spot_price = data['Close'].iloc[-1]
+simulated_prices = gbm_sim(spot_price, annualized_volatility, simulation_days, model_best, features, data)
 
-new_df = st.data_editor(
-    df,
-    column_config={
-        "Questions": st.column_config.TextColumn(width="medium", disabled=True),
-        "Answers": st.column_config.TextColumn(width="medium", disabled=True),
-        "Issue": st.column_config.CheckboxColumn("Mark as annotated?", default=False),
-        "Category": st.column_config.SelectboxColumn(
-            "Issue Category",
-            help="select the category",
-            options=["Accuracy", "Relevance", "Coherence", "Bias", "Completeness"],
-            required=False,
-        ),
-    },
-)
+# Plot results
+st.subheader("Hasil Prediksi Simulasi")
+plt.figure(figsize=(12, 6))
+for i in range(n_simulations):
+    plt.plot(simulated_prices[:, i], lw=0.5)
+plt.xlabel("Hari")
+plt.ylabel("Harga Saham")
+plt.title(f"Simulasi Harga Saham {ticker} Selama {simulation_days} Hari")
+plt.grid(True)
+st.pyplot(plt)
 
-st.write(
-    "You will notice that we changed our dataframe and added new data. "
-    "Now it is time to visualize what we have annotated!"
-)
+# Display percentiles
+percentiles = np.percentile(simulated_prices[-1, :], [5, 50, 95])
+st.write(f"5th percentile: {percentiles[0]}")
+st.write(f"Median: {percentiles[1]}")
+st.write(f"95th percentile: {percentiles[2]}")
 
-st.divider()
+# Save results to CSV or Excel
+if st.button("Simpan Hasil ke CSV"):
+    results_df = pd.DataFrame(simulated_prices)
+    csv = results_df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="simulated_prices.csv">Download CSV File</a>'
+    st.markdown(href, unsafe_allow_html=True)
 
-st.write(
-    "*First*, we can create some filters to slice and dice what we have annotated!"
-)
-
-col1, col2 = st.columns([1, 1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options=new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox(
-        "Choose a category",
-        options=new_df[new_df["Issue"] == issue_filter].Category.unique(),
-    )
-
-st.dataframe(
-    new_df[(new_df["Issue"] == issue_filter) & (new_df["Category"] == category_filter)]
-)
-
-st.markdown("")
-st.write(
-    "*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`"
-)
-
-issue_cnt = len(new_df[new_df["Issue"] == True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
-
-col1, col2 = st.columns([1, 1])
-with col1:
-    st.metric("Number of responses", issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
-
-df_plot = new_df[new_df["Category"] != ""].Category.value_counts().reset_index()
-
-st.bar_chart(df_plot, x="Category", y="count")
-
-st.write(
-    "Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:"
-)
-
+if st.button("Simpan Hasil ke Excel"):
+    output = io.BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    results_df.to_excel(writer, index=False, sheet_name='Sheet1')
+    writer.save()
+    processed_data = output.getvalue()
+    b64 = base64.b64encode(processed_data).decode()
+    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="simulated_prices.xlsx">Download Excel File</a>'
+    st.markdown(href, unsafe_allow_html=True)
