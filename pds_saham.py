@@ -1,7 +1,5 @@
 import subprocess
 import sys
-import streamlit as st
-import base64
 
 # Fungsi untuk menginstal modul dari requirements.txt
 def install_requirements():
@@ -14,36 +12,39 @@ install_requirements()
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from ta.utils import dropna
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, r2_score
 import io
+import base64
+
+# Set page config to wide layout
+st.set_page_config(layout="wide")
 
 # Title and Description
-st.title("Simulasi GBM untuk Harga Saham ASII")
+st.title("Simulasi GBM untuk Prediksi Harga Saham ASII")
 st.write("Anggota Kelompok: [Argi, Azis, Cakra, Marcel, Steven]")
 
 # Parameters for simulation
 st.sidebar.header("Parameter Simulasi")
-start_date = st.sidebar.date_input("Tanggal Mulai", pd.to_datetime("2020-01-01"))
-end_date = st.sidebar.date_input("Tanggal Akhir", pd.to_datetime("2023-12-31"))
-ticker = st.sidebar.text_input("Ticker", "ASII.JK")
-simulation_days = st.sidebar.number_input("Jangka Waktu Simulasi (hari)", min_value=1, value=252)
-n_simulations = st.sidebar.number_input("Jumlah Simulasi", min_value=1, value=100)
+min_date = pd.to_datetime("2022-01-01").date()
+start_date = st.sidebar.date_input("Tanggal Mulai", min_date)
+st.sidebar.info("Tanggal mulai harus sebelum tanggal hari ini.", icon="ℹ️")
+time_horizon = st.sidebar.number_input('Jangka Waktu (hari setelah hari ini)', min_value=30, value=500)
+# st.sidebar.info(f"{time_horizon} hari setelah hari ini.", icon="ℹ️")
+ticker = st.sidebar.text_input("Kode Saham", "ASII")
+
+# Capitalize ticker and add .JK
+ticker = ticker.upper() + ".JK"
 
 # Download data
-data = yf.download(ticker, start=start_date, end=end_date)
+data = yf.download(ticker, start=start_date, end=None)
 data['Log Return'] = np.log(data['Close'] / data['Close'].shift(1))
 data.dropna(inplace=True)
 
 # Preprocess data
 features = data.drop(columns=['Log Return']).columns
-scaler = MinMaxScaler()
-data[features] = scaler.fit_transform(data[features])
 
 # Split data
 X = data[features]
@@ -54,58 +55,61 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 model_best = GradientBoostingRegressor(learning_rate=0.1, max_depth=5, min_samples_leaf=2, min_samples_split=5, n_estimators=400, random_state=42)
 model_best.fit(X_train, y_train)
 
-# Calculate annualized volatility
+# Hitung volatilitas tahunan berdasarkan pengembalian log harian
 daily_returns = np.log(data["Close"].pct_change() + 1)
 annualized_volatility = daily_returns.std() * np.sqrt(252)
 
-# Define GBM simulation function
+# Fungsi untuk simulasi GBM dengan drift yang diprediksi oleh model
 def gbm_sim(spot_price, volatility, time_horizon, model, features, data):
-    dt = 1 / 252
+    dt = 1 / 252  # asumsi satu hari perdagangan (252 hari perdagangan dalam setahun)
     drift = model.predict(data[features])
-    paths = np.zeros((time_horizon, n_simulations))
+    paths = np.zeros(time_horizon + 1)  # Change len(data) + 1 to time_horizon + 1
     paths[0] = spot_price
     
-    for t in range(1, time_horizon):
-        Z = np.random.normal(size=n_simulations)
-        paths[t] = paths[t-1] * np.exp((drift[t-1] - 0.5 * volatility**2) * dt + volatility * np.sqrt(dt) * Z)
+    for i in range(1, time_horizon + 1):  # Change len(data) + 1 to time_horizon + 1
+        Z = np.random.normal()
+        paths[i] = paths[i-1] * np.exp((drift[min(i-1, len(drift)-1)] - 0.5 * volatility**2) * dt + volatility * np.sqrt(dt) * Z)
     
     return paths
 
-# Run simulation
-spot_price = data['Close'].iloc[-1]
-simulated_prices = gbm_sim(spot_price, annualized_volatility, simulation_days, model_best, features, data)
+# Definisikan parameter simulasi
+spot_price = data['Close'].iloc[-1]  # harga penutupan terakhir sebagai harga awal
+features = X.columns
 
-# Plot results
+# # Calculate time horizon
+# time_horizon = (end_date - start_date).days
+# st.write(time_horizon)
+
+# Lakukan simulasi GBM
+simulated_prices = gbm_sim(spot_price, annualized_volatility, time_horizon, model_best, features, data)
+# st.write(simulated_prices)
+
+# Buat index tanggal untuk hasil simulasi
+simulated_index = pd.date_range(start=data.index[-1], periods=time_horizon+1, freq='B')
+# st.write(simulated_index)
+
+# Plot hasil simulasi dan data aktual
 st.subheader("Hasil Prediksi Simulasi")
 plt.figure(figsize=(12, 6))
-for i in range(n_simulations):
-    plt.plot(simulated_prices[:, i], lw=0.5)
-plt.xlabel("Hari")
+plt.plot(simulated_index, simulated_prices, lw=0.5, label='Simulasi')
+plt.plot(data.index, data['Close'], lw=0.5, label='Aktual')
+plt.xlabel("Tanggal")
 plt.ylabel("Harga Saham")
-plt.title(f"Simulasi Harga Saham {ticker} Selama {simulation_days} Hari")
+plt.title(f"Simulasi Harga Saham {ticker}")
+plt.legend(loc='best')
 plt.grid(True)
 st.pyplot(plt)
 
 # Display percentiles
-percentiles = np.percentile(simulated_prices[-1, :], [5, 50, 95])
+percentiles = np.percentile(simulated_prices[1:], [5, 50, 95])
 st.write(f"5th percentile: {percentiles[0]}")
 st.write(f"Median: {percentiles[1]}")
 st.write(f"95th percentile: {percentiles[2]}")
 
-# Save results to CSV or Excel
+# Save results to CSV
 if st.button("Simpan Hasil ke CSV"):
     results_df = pd.DataFrame(simulated_prices)
     csv = results_df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     href = f'<a href="data:file/csv;base64,{b64}" download="simulated_prices.csv">Download CSV File</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-if st.button("Simpan Hasil ke Excel"):
-    output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    results_df.to_excel(writer, index=False, sheet_name='Sheet1')
-    writer.save()
-    processed_data = output.getvalue()
-    b64 = base64.b64encode(processed_data).decode()
-    href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="simulated_prices.xlsx">Download Excel File</a>'
     st.markdown(href, unsafe_allow_html=True)
